@@ -147,3 +147,23 @@ jobs:
           for log in out/gpu-build.log out/fex-build.log; do
             [ -f "$log" ] && { echo "--- $log ---"; tail -100 "$log"; }
           done
+
+  release:
+    needs: appimage
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: '*-aarch64.AppImage'
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*-aarch64.AppImage
+            dist/*-aarch64.AppImage.sha256
+          fail_on_unmatched_files: true
+          prerelease: false
