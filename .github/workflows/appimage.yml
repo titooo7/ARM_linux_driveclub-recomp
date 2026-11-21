@@ -35,7 +35,8 @@ env:
   # The release uses LTO and a PGO profile; the CI AppImage is built without either for a
   # faster, reproducible run (BB_LTO=ON works, it only takes much longer).
   BB_LTO: 'ON'
-  BB_PGO: 'generate'
+  BB_PGO: 'use'
+  BB_PGO_DIR: ${{ github.workspace }}/pgo-linux-aarch64
   CC: clang
   CXX: clang++
 
