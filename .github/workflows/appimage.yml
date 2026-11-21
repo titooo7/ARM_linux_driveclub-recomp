@@ -4,6 +4,7 @@ on:
   workflow_dispatch:
   push:
     tags: ['v*']
+    branches: [perf-test]
   pull_request:
     paths:
       - '.github/workflows/appimage.yml'
@@ -93,7 +94,19 @@ jobs:
         run: bash packaging/appimage/fetch-deps.sh
 
       - name: Build the native Linux runtime
-        run: bash build-linux.sh
+        run: mkdir -p out; bash build-linux.sh 2>&1 | tee out/build-step.log; test "${PIPESTATUS[0]}" -eq 0
+
+      # perf-test only: prove which optimizations the GPU library was really built with.
+      - name: Check optimization flags (perf-test)
+        run: |
+          lto=$(grep -c -- '-flto' out/gpu/build.ninja || true)
+          use=$(grep -c -- '-fprofile-use=' out/gpu/build.ninja || true)
+          gen=$(grep -c -- '-fprofile-generate=' out/gpu/build.ninja || true)
+          echo "flags: BB_LTO=$BB_LTO BB_PGO=$BB_PGO -flto=$lto -fprofile-use=$use -fprofile-generate=$gen"
+          if grep -q 'LTO unavailable' out/build-step.log; then echo 'LTO unavailable' >&2; exit 1; fi
+          if [ "$BB_LTO" = ON ] && [ "$lto" -eq 0 ]; then echo 'no -flto' >&2; exit 1; fi
+          if [ "$BB_PGO" = use ] && [ "$use" -eq 0 ]; then echo 'no -fprofile-use' >&2; exit 1; fi
+          if [ "$BB_PGO" = generate ] && [ "$gen" -eq 0 ]; then echo 'no -fprofile-generate' >&2; exit 1; fi
 
       # build-linux.sh compiles src/runtime*.c, so the HLE change is build-tested above.
       # This checks the glyph fallback itself without needing any game files.
