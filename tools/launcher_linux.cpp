@@ -18,6 +18,8 @@
 #include "imgui_impl_sdlrenderer3.h"
 #include "prepare.h"
 #include "unlock_linux.h"
+#include "fileio_linux.h"
+#include "graphics_linux.h"
 
 #include <algorithm>
 #include <atomic>
@@ -132,6 +134,7 @@ struct Settings {
   int fsr_ver = 0;         // FSR 3.1, FSR 4, FSR (AMD driver)
   int reflex = 0;          // Off, On, On + Boost
   int model_lod = 0;       // Highest .. Lowest
+  bool detail_low = false; // Low detail (seregasmith): simpler scenery, shadows, other cars, particles
   int dynres = 1;          // Off, Automatic, On
   int blur_ref = 0;        // Fast (60 Hz), Slow (30 Hz)
   int prompts = 0;         // Automatic, PlayStation, Xbox, Keyboard
@@ -969,6 +972,7 @@ void LoadSettings() {
   ParseBool(kv, "neural", g.neural);
   ParseInt(kv, "nr_preset", g.nr_preset);
   ParseBool(kv, "dlc_unlock", g.dlc_unlock);
+  ParseBool(kv, "detail_low", g.detail_low);
   ParseBool(kv, "unlock_all", g.unlock_all);
   ParseBool(kv, "autoplay", g.autoplay);
   ParseInt(kv, "bench_track", g.btrack);
@@ -1187,6 +1191,12 @@ std::map<std::string, std::string> EnvironmentForLaunch() {
                         "; wide=" + std::to_string(g.wide) + "; aa=" + kAaName[g.aa] +
                         "; upscale=" + kUpscaleName[g.upscale] + "; hdr=" + (g.hdr ? "on" : "off") + ";";
   set("BB_SETTINGS_SUMMARY", summary);
+  if (g.detail_low) {
+    // The PS4's cull limits with Low (as seregasmith's run.sh does), and the edited global.rpk for --play.
+    set("BB_CULL_SCALE", "1");
+    set("BB_CULL_SCALE_SHADOW", "1");
+    set("BB_GRAPHICS_MODS", (g_paths.data / "graphics").string());
+  }
   return env;
 }
 
@@ -1200,7 +1210,7 @@ void ApplyEnvironment(const std::map<std::string, std::string>& env) {
       "BB_WHEEL_ASSIST", "BB_RESTART_COMMAND", "BB_SETTINGS_SUMMARY", "BB_UPSCALER", "BB_REFLEX",
       "BB_MOTION_BLUR_REFERENCE", "BB_BUTTON_PROMPTS", "BB_XBOX_BUTTONS", "BB_PLAYSTATION_BUTTONS",
       "BB_ONLINE", "BB_COOP_SERVER", "BB_NP_LOCAL", "BB_PRESENT_THREAD", "BB_NEURAL",
-      "BB_NR_CONFIG"};
+      "BB_NR_CONFIG", "BB_CULL_SCALE", "BB_CULL_SCALE_SHADOW", "BB_GRAPHICS_MODS"};
   for (const char* name : names) {
     if (!env.count(name)) unsetenv(name);
   }
@@ -1347,6 +1357,7 @@ bool SaveSettings() {
       << "neural=" << (g.neural ? 1 : 0) << "\n"
       << "nr_preset=" << g.nr_preset << "\n"
       << "dlc_unlock=" << (g.dlc_unlock ? 1 : 0) << "\n"
+      << "detail_low=" << (g.detail_low ? 1 : 0) << "\n"
       << "unlock_all=" << (g.unlock_all ? 1 : 0) << "\n"
       << "online=" << g.online << "\n"
       << "online_host=" << g.online_host << "\n"
@@ -1431,6 +1442,7 @@ std::string g_prep_text;
 std::string g_prep_error;
 std::string g_unlock_error;
 std::atomic<bool> g_unlock_ready{false};
+std::atomic<bool> g_graphics_ready{false};
 std::thread g_prep_thread;
 
 bool SpawnGame(const std::vector<std::string>& args, const fs::path& cwd, const fs::path& log_path,
@@ -1520,6 +1532,11 @@ bool LaunchGame(bool benchmark) {
     args.push_back("--mods");
     args.push_back((g_paths.data / "unlock").string());
   }
+  // Low detail: the edited global.rpk, after the player's own mods so theirs keeps priority.
+  if (g_graphics_ready && g.detail_low) {
+    args.push_back("--mods");
+    args.push_back((g_paths.data / "graphics").string());
+  }
   args.push_back("--stub-unresolved");
   args.push_back("--timeout");
   args.push_back("0");
@@ -1584,13 +1601,16 @@ void StartPrepare(bool benchmark = false) {
   g_prep_joined.store(false);
   g_preparing.store(true);
   g_unlock_ready = false;
+  g_graphics_ready = false;
+  GraphicsChoice detail;
+  if (g.detail_low) detail.opponents = detail.scenery = detail.shadows = detail.particles = -1;
   const bool unlock_dlc = g.dlc_unlock || g.unlock_all;
   const bool unlock_all = g.unlock_all;
   const std::string update = EffectiveUpdate();
   const std::string base = g.base;
   const std::string data = g_paths.data.string();
   const std::string xml = g_paths.patch_xml.string();
-  g_prep_thread = std::thread([update, base, data, xml, unlock_dlc, unlock_all] {
+  g_prep_thread = std::thread([update, base, data, xml, unlock_dlc, unlock_all, detail] {
     std::string error;
     try {
       error = PrepareGame(fs::path(update), fs::path(base), fs::path(data), fs::path(xml), false,
@@ -1612,6 +1632,19 @@ void StartPrepare(bool benchmark = false) {
       }
       unlock_problem = BuildUnlockFiles(update, base, data + "/unlock", unlock_all);
       if (!unlock_problem.empty()) AppendLog("add-on content: " + unlock_problem);
+    }
+    if (error.empty()) {
+      // Game detail removes the files; a problem leaves the game at its own detail.
+      bool active = false;
+      std::wstring problem;
+      try {
+        problem = BuildGraphics(fs::path(update), fs::path(base), fs::path(data) / "graphics", detail, active);
+      } catch (const std::exception& e) {
+        problem = L"unexpected error";
+        AppendLog(std::string("detail level: ") + e.what());
+      }
+      if (!problem.empty()) AppendLog("detail level: " + fileio::Narrow(problem) + " (the game's own detail is used)");
+      g_graphics_ready.store(problem.empty() && active);
     }
     {
       std::lock_guard<std::mutex> lock(g_prep_mutex);
@@ -3049,6 +3082,20 @@ void LogsPage() {
 }
 
 void GraphicsPage() {
+  if (BeginCard("DETAIL LEVEL")) {
+    static const char* const kDetailName[2] = {"Game", "Low"};
+    int level = g.detail_low ? 1 : 0;
+    if (ComboRow("Detail level", "Low draws simpler roadside objects and other cars sooner, fewer shadow samples "
+                                 "up close and half the particles, for a faster frame rate on slow GPUs.",
+                 &level, kDetailName, 2)) {
+      g.detail_low = level == 1;
+      g.dirty = true;
+    }
+    ImGui::TextDisabled(g.detail_low ? "Built from your game files when you press Play. By seregasmith."
+                                     : "The game's own detail.");
+  }
+  EndCard();
+
   if (BeginCard("MODEL DETAIL")) {
     int lod = g.model_lod + 2;
     if (ComboRow("Model detail", "How far from the camera the game keeps full-detail car and track models. "

@@ -403,5 +403,9 @@ args=("$data/prep/boot-linked.bin" --content-profile "$data/prep/content.bin"
       --patches "$data/prep/patches.bin" --app0 "$update_dir" --user "$data/user"
       --mods "$data/mods" --stub-unresolved --timeout 0)
 if [ "$base_dir" != "$update_dir" ]; then args+=(--app0-base "$base_dir"); fi
+# Low detail (launcher Graphics page): the edited global.rpk the launcher built at its last Play.
+if [ -n "${BB_GRAPHICS_MODS:-}" ] && [ -f "$BB_GRAPHICS_MODS/global.rpk" ]; then
+    args+=(--mods "$BB_GRAPHICS_MODS")
+fi
 args+=("${game_args[@]}")
 exec "$bindir/driveclub-probe" "${args[@]}"

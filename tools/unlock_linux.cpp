@@ -513,3 +513,8 @@ std::string BuildUnlockFiles(const std::string& update_dir, const std::string& b
   }
   return "";
 }
+
+std::string LinuxDatxExtract(const std::filesystem::path& update_dir, const std::filesystem::path& base_dir,
+                             const std::string& path, std::vector<uint8_t>& out) {
+  return DatxExtract(update_dir, base_dir, path, out);
+}
