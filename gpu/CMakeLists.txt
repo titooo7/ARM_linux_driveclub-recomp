@@ -39,6 +39,8 @@ elseif (BB_PGO STREQUAL "use" AND CMAKE_CXX_COMPILER_ID MATCHES "Clang")
     add_compile_options(-fprofile-use=${BB_PGO_DIR} -Wno-profile-instr-missing
                         -Wno-profile-instr-out-of-date -Wno-profile-instr-unprofiled
                         -Wno-error=backend-plugin)
+    # perf-test: clang 18's optimizer crashes (stack smashing) on liverpool.cpp's coroutines with a profile.
+    set_source_files_properties(shadps4/video_core/amdgpu/liverpool.cpp PROPERTIES COMPILE_OPTIONS -fno-profile-instr-use)
 elseif (BB_PGO STREQUAL "use")
     # GCC (Linux, .gcda files): partial training keeps unprofiled code optimized normally; counters from
     # concurrent threads can be slightly inconsistent (correction).
